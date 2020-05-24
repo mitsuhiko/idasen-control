@@ -80,11 +80,9 @@ async function runClient() {
       sittingHint: status.pos === "sitting" ? "sitting" : "",
     };
     console.log(
-      template
-        .replace(/%\((.*?)\)s/g, (_, group) => {
-          return vars[group] || "";
-        })
-        .trim()
+      template.replace(/%\((.*?)\)s/g, (_, group) => {
+        return vars[group] || "";
+      })
     );
   }
 }
