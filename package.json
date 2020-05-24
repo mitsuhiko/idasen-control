@@ -1,6 +1,6 @@
 {
   "name": "idasen-control",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "IKEA Idasen Desk Control",
   "bin": "./src/index.js",
   "eslintConfig": {
@@ -37,9 +37,7 @@
   "volta": {
     "node": "14.3.0"
   },
-  "platform": {
-    "node": {
-      "runtime": "14.3.0"
-    }
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
