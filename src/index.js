@@ -229,7 +229,7 @@ async function runServer() {
 }
 
 if (process.env.IDASEN_START_SERVER === "1") {
-  runServer().then(() => process.exit(0));
+  runServer();
 } else {
   runClient().then(() => process.exit(0));
 }
