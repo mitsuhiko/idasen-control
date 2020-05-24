@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 const process = require("process");
 const { spawn } = require("child_process");
 const fs = require("fs");
