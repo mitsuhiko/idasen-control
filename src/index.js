@@ -6,6 +6,8 @@ const net = require("net");
 const { DeskManager } = require("./desk-manager");
 const { program } = require("commander");
 const { promisify } = require("util");
+const { getIdleTime } = require("desktop-idle");
+const prettyMilliseconds = require("pretty-ms");
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -13,6 +15,9 @@ const unlink = promisify(fs.unlink);
 
 const SOCKET = "/tmp/idasen-control.sock";
 const PIDFILE = "/tmp/idasen-control.pid";
+const CHECK_INTERVAL = 5.0;
+const BREAK_TIME = 2 * 60;
+const STAND_THRESHOLD = 30;
 
 program
   .option("-a, --addr <addr>", "Explicit bluetooth address of the table")
@@ -22,7 +27,9 @@ program
   .option("-m, --move-to <number>", "Position to move the desk to", (val) =>
     parseInt(val, 10)
   )
-  .option("-p, --get-pos", "Get the current position")
+  .option("-s, --status", "Get the current status")
+  .option("--prompt-fragment", "Render a prompt fragment")
+  .option("--json", "Output as JSON")
   .parse(process.argv);
 
 function sleep(ms) {
@@ -31,20 +38,54 @@ function sleep(ms) {
 
 async function runClient() {
   if (!(await readPid())) {
-    const env = { ...process.env, IDASEN_START_SERVER: "1" };
-    const [_first, ...argv] = process.argv;
-    spawn(process.execPath, argv, {
-      env,
-      detached: true,
-      stdio: "ignore",
-    });
+    if (process.env.IDASEN_NO_DAEMON === "1") {
+      runServer();
+    } else {
+      const env = { ...process.env, IDASEN_START_SERVER: "1" };
+      const [_first, ...argv] = process.argv;
+      spawn(process.execPath, argv, {
+        env,
+        detached: true,
+        stdio: "ignore",
+      });
+    }
     await sleep(100);
   }
 
   if (program.moveTo) {
-    console.log(await sendCommand({ op: "moveTo", pos: program.moveTo }));
-  } else if (program.getPos) {
-    console.log(await sendCommand({ op: "getPos" }));
+    await sendCommand({ op: "moveTo", pos: program.moveTo });
+  } else if (program.status) {
+    const status = await sendCommand({ op: "getStatus" });
+    if (program.json) {
+      console.log(JSON.stringify(status));
+    } else {
+      console.log(`height: ${status.height} (${status.pos})`);
+      console.log(
+        `time sitting: ${prettyMilliseconds(status.sittingTime * 1000)}`
+      );
+    }
+  } else if (program.promptFragment) {
+    const template =
+      process.env.IDASEN_PROMPT_TEMPLATE ||
+      "%(sittingWarning)s %(standingHint)s";
+    const status = await sendCommand({ op: "getStatus" });
+    let vars = {
+      sittingTime: prettyMilliseconds(status.sittingTime * 1000),
+      sittingWarning:
+        status.sittingTime >= 30 * 60
+          ? `sitting for ${prettyMilliseconds(status.sittingTime * 1000)}`
+          : "",
+      positionHint: status.pos,
+      standingHint: status.pos === "standing" ? "standing" : "",
+      sittingHint: status.pos === "sitting" ? "sitting" : "",
+    };
+    console.log(
+      template
+        .replace(/%\((.*?)\)s/g, (_, group) => {
+          return vars[group] || "";
+        })
+        .trim()
+    );
   }
 }
 
@@ -108,6 +149,10 @@ process.on("SIGINT", () => {
   process.exit();
 });
 
+function describePosition(desk) {
+  return desk.position >= STAND_THRESHOLD ? "standing" : "sitting";
+}
+
 async function sendCommand(cmd) {
   return new Promise((resolve) => {
     const client = net.createConnection({ path: SOCKET }, () => {
@@ -122,11 +167,12 @@ async function sendCommand(cmd) {
   });
 }
 
-if (process.env.IDASEN_START_SERVER === "1") {
+async function runServer() {
   let resolveReadyPromise = null;
   let readyPromise = new Promise((resolve) => {
     resolveReadyPromise = resolve;
   });
+  let sittingTime = 0;
 
   const manager = new DeskManager({
     deskAddress: program.addr || process.env.IDASEN_ADDR,
@@ -136,6 +182,18 @@ if (process.env.IDASEN_START_SERVER === "1") {
     },
   });
 
+  setInterval(() => {
+    readyPromise.then((desk) => {
+      // someone did something
+      const idleTime = getIdleTime();
+      if (idleTime < CHECK_INTERVAL && desk.position < STAND_THRESHOLD) {
+        sittingTime += CHECK_INTERVAL;
+      } else if (desk.position >= STAND_THRESHOLD || idleTime >= BREAK_TIME) {
+        sittingTime = 0;
+      }
+    });
+  }, CHECK_INTERVAL * 1000);
+
   ensureServer(async (message) => {
     if (message.op === "moveTo") {
       const desk = await readyPromise;
@@ -144,9 +202,13 @@ if (process.env.IDASEN_START_SERVER === "1") {
     } else if (message.op === "wait") {
       await readyPromise;
       return true;
-    } else if (message.op === "getPos") {
+    } else if (message.op === "getStatus") {
       const desk = await readyPromise;
-      return desk.position;
+      return {
+        height: desk.position,
+        pos: describePosition(desk),
+        sittingTime,
+      };
     } else {
       return false;
     }
@@ -166,6 +228,10 @@ if (process.env.IDASEN_START_SERVER === "1") {
       // ignore
     }
   });
+}
+
+if (process.env.IDASEN_START_SERVER === "1") {
+  runServer().then(() => process.exit(0));
 } else {
   runClient().then(() => process.exit(0));
 }

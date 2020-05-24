@@ -153,11 +153,12 @@ class Desk extends EventEmitter {
     this.isMoving = true;
 
     const isMovingUp = targetPosition > this.position;
-    const stopThreshold = 1;
+    const stopThreshold = 1.0;
 
     let lastPosition = this.position;
     let lastSpeed = 0;
     let shouldStopCounter = 0;
+    let lastCommand = 0;
 
     try {
       while (
@@ -165,13 +166,17 @@ class Desk extends EventEmitter {
         ((isMovingUp && this.position + stopThreshold < targetPosition) ||
           (!isMovingUp && this.position - stopThreshold > targetPosition))
       ) {
-        await this.ensureConnection();
-        await this.controlChar.writeAsync(
-          isMovingUp ? Desk.control().up : Desk.control().down,
-          false
-        );
+        if (lastCommand == 0 || lastCommand < +new Date() - 300) {
+          await this.ensureConnection();
+          await this.controlChar.writeAsync(
+            isMovingUp ? Desk.control().up : Desk.control().down,
+            false
+          );
+          lastCommand = +new Date();
+        }
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
         await this.readPosition();
 
         if (
