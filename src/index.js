@@ -3,111 +3,198 @@ const process = require("process");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const net = require("net");
-const { DeskManager } = require("./desk-manager");
 const { program } = require("commander");
 const { promisify } = require("util");
 const { getIdleTime } = require("desktop-idle");
 const prettyMilliseconds = require("pretty-ms");
 
+const { DeskManager } = require("./desk-manager");
+const { log, sleep } = require("./utils");
+const { getConfig, loadConfig, saveConfig } = require("./config");
+
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 
-const SOCKET = "/tmp/idasen-control.sock";
-const PIDFILE = "/tmp/idasen-control.pid";
 const CHECK_INTERVAL = 5.0;
-const BREAK_TIME = 2 * 60;
-const STAND_THRESHOLD = 30;
 
 program
-  .option("-a, --addr <addr>", "Explicit bluetooth address of the table")
-  .option("--position-max <number>", "Maximum position to be honored", (val) =>
-    parseInt(val, 10)
-  )
   .option("-m, --move-to <number>", "Position to move the desk to", (val) =>
     parseInt(val, 10)
   )
   .option("-s, --status", "Get the current status")
+  .option("--wait", "Waits for operations to finish")
+  .option("--connect-to <ADDR>", "Connect to the desk with the given address")
   .option("--prompt-fragment", "Render a prompt fragment")
+  .option("--print-config", "Print the config")
   .option("--json", "Output as JSON")
+  .option("--scan", "Scans for desks")
+  .option("--server", "Starts the server (done automatically normally)")
+  .option("--stop-server", "Stops the server if it's running")
   .parse(process.argv);
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function runClient() {
-  if (!(await readPid())) {
-    if (process.env.IDASEN_NO_DAEMON === "1") {
-      runServer();
-    } else {
-      const env = { ...process.env, IDASEN_START_SERVER: "1" };
-      const [_first, ...argv] = process.argv;
-      spawn(process.execPath, argv, {
-        env,
-        detached: true,
-        stdio: "ignore",
-      });
-    }
-    await sleep(100);
-  }
+  const config = getConfig();
 
-  if (program.moveTo) {
-    await sendCommand({ op: "moveTo", pos: program.moveTo });
-  } else if (program.status) {
-    const status = await sendCommand({ op: "getStatus" });
-    if (program.json) {
-      console.log(JSON.stringify(status));
-    } else {
-      console.log(`height: ${status.height} (${status.pos})`);
+  // non server operations
+  if (program.scan) {
+    console.log("Scanning for desks");
+    const manager = new DeskManager({
+      verbose: false,
+    });
+    let resolveDonePromise;
+    const donePromise = new Promise((resolve) => {
+      resolveDonePromise = resolve;
+    });
+    let scanUntil = +new Date() + 10000;
+    let found = 0;
+    setInterval(() => {
+      if (scanUntil < new Date()) {
+        resolveDonePromise();
+      }
+    }, 1000);
+
+    let seen = {};
+    manager.on("discover", (peripheral) => {
+      if (
+        peripheral.address &&
+        peripheral.advertisement.localName &&
+        !seen[peripheral.id]
+      ) {
+        seen[peripheral.id] = peripheral;
+        console.log(
+          `  Found "${peripheral.advertisement.localName}" [address: ${peripheral.address}]`
+        );
+        found++;
+        scanUntil = +new Date() + 2000;
+      }
+    });
+    manager.start();
+
+    await donePromise;
+    console.log("Done scanning.");
+    if (found > 0) {
       console.log(
-        `time sitting: ${prettyMilliseconds(status.sittingTime * 1000)}`
+        `Found ${found} desk${
+          found == 1 ? "" : "s"
+        }.  Connect with --connect-to`
+      );
+    } else {
+      console.log(
+        "No desks found. Make sure to bring the desk to pairing mode before scanning."
       );
     }
-  } else if (program.promptFragment) {
-    const template =
-      process.env.IDASEN_PROMPT_TEMPLATE ||
-      "%(sittingWarning)s %(standingHint)s";
-    const status = await sendCommand({ op: "getStatus" });
-    let vars = {
-      sittingTime: prettyMilliseconds(status.sittingTime * 1000),
-      sittingWarning:
-        status.sittingTime >= 30 * 60
-          ? `sitting for ${prettyMilliseconds(status.sittingTime * 1000)}`
-          : "",
-      positionHint: status.pos,
-      standingHint: status.pos === "standing" ? "standing" : "",
-      sittingHint: status.pos === "sitting" ? "sitting" : "",
-    };
-    console.log(
-      template.replace(/%\((.*?)\)s/g, (_, group) => {
-        return vars[group] || "";
-      })
-    );
+  } else if (program.printConfig) {
+    if (program.json) {
+      console.log(JSON.stringify(config, null, 2));
+    } else {
+      console.log(config);
+    }
+  } else if (program.connectTo) {
+    config.deskAddress = program.connectTo;
+    await saveConfig();
+  } else if (program.stopServer) {
+    const pid = await readPid();
+    if (pid !== null) {
+      console.log("Stopping server");
+      process.kill(pid);
+    } else {
+      console.log("Server not running");
+    }
+  } else {
+    // these operations want the server.
+    if (!(await serverIsRunning())) {
+      if (process.env.IDASEN_NO_DAEMON === "1") {
+        runServer();
+      } else {
+        const env = { ...process.env, IDASEN_START_SERVER: "1" };
+        const [_first, ...argv] = process.argv;
+        spawn(process.execPath, argv, {
+          env,
+          detached: true,
+          stdio: "ignore",
+        });
+      }
+      await sleep(100);
+    }
+
+    if (program.moveTo) {
+      await sendCommand({ op: "moveTo", pos: program.moveTo }, program.wait);
+    } else if (program.status) {
+      const status = await getStatus();
+      if (program.json) {
+        console.log(JSON.stringify(status, null, 2));
+      } else if (!status.ready) {
+        console.log("Desk is not ready");
+      } else {
+        console.log(`height: ${status.height} (${status.pos})`);
+        console.log(
+          `time sitting: ${prettyMilliseconds(status.sittingTime * 1000)}`
+        );
+      }
+    } else if (program.promptFragment) {
+      const template =
+        process.env.IDASEN_PROMPT_TEMPLATE ||
+        "%(sittingWarning)s %(standingHint)s";
+      const status = await getStatus();
+      const sittingTime = status.ready ? status.sittingTime : 0;
+      const pos = status.ready ? status.pos : "unknown";
+      let vars = {
+        sittingTime: prettyMilliseconds(sittingTime * 1000),
+        sittingWarning:
+          sittingTime >= 30 * 60
+            ? `sitting for ${prettyMilliseconds(sittingTime * 1000)}`
+            : "",
+        positionHint: pos,
+        standingHint: pos === "standing" ? "standing" : "",
+        sittingHint: pos === "sitting" ? "sitting" : "",
+      };
+      console.log(
+        template.replace(/%\((.*?)\)s/g, (_, group) => {
+          return vars[group] || "";
+        })
+      );
+    }
   }
+}
+
+async function serverIsRunning() {
+  return (await readPid()) !== null;
 }
 
 async function readPid() {
+  const config = getConfig();
   try {
-    const contents = await readFile(PIDFILE, "utf8");
+    const contents = await readFile(config.pidFilePath, "utf8");
     const pid = parseInt(contents, 10);
+    if (Number.isNaN(pid)) {
+      return null;
+    }
     try {
-      return process.kill(pid, 0);
+      if (process.kill(pid, 0)) {
+        return pid;
+      }
     } catch (e) {
-      return e.code === "EPERM";
+      if (e.code === "EPERM") {
+        console.log("eperm");
+        return pid;
+      }
     }
   } catch (e) {
-    return false;
+    // ignore
   }
+  return null;
 }
 
 async function writePid() {
-  await writeFile(PIDFILE, `${process.pid}\n`);
+  await writeFile(getConfig().pidFilePath, `${process.pid}\n`);
 }
 
 async function ensureServer(onMessage) {
+  const config = getConfig();
+
   try {
-    await unlink(SOCKET);
+    await unlink(config.socketPath);
   } catch (e) {
     // doesn't matter
   }
@@ -115,6 +202,7 @@ async function ensureServer(onMessage) {
   const server = net
     .createServer((stream) => {
       let buffer = "";
+      let connected = true;
       stream.on("data", async (data) => {
         buffer += data;
         while (true) {
@@ -131,12 +219,21 @@ async function ensureServer(onMessage) {
             continue;
           }
 
+          log("received request", parsedMsg);
           let rv = await onMessage(parsedMsg);
-          stream.write(JSON.stringify(rv) + "\n");
+          if (connected) {
+            log("sending response", rv);
+            stream.write(JSON.stringify(rv) + "\n");
+          } else {
+            log("dropping response because client disconnected");
+          }
         }
       });
+      stream.on("end", () => {
+        connected = false;
+      });
     })
-    .listen(SOCKET);
+    .listen(config.socketPath);
 
   await writePid();
 
@@ -148,45 +245,59 @@ process.on("SIGINT", () => {
 });
 
 function describePosition(desk) {
-  return desk.position >= STAND_THRESHOLD ? "standing" : "sitting";
+  return desk.position >= getConfig().standThreshold ? "standing" : "sitting";
 }
 
-async function sendCommand(cmd) {
+async function sendCommand(cmd, wait) {
+  wait = wait || false;
+  const config = getConfig();
   return new Promise((resolve) => {
-    const client = net.createConnection({ path: SOCKET }, () => {
-      client.write(JSON.stringify(cmd) + "\n");
+    const client = net.createConnection({ path: config.socketPath }, () => {
+      client.write(JSON.stringify(cmd) + "\n", () => {
+        if (!wait) {
+          resolve(undefined);
+        }
+      });
     });
-    client.on("data", (data) => {
-      resolve(JSON.parse(data));
-    });
+    if (wait) {
+      client.on("data", (data) => {
+        resolve(JSON.parse(data));
+      });
+    }
     client.on("end", () => {
       // nothing
     });
   });
 }
 
+async function getStatus() {
+  const status = await Promise.race([
+    sendCommand({ op: "getStatus" }, true),
+    sleep(100),
+  ]);
+  return status || { ready: false };
+}
+
 async function runServer() {
-  let resolveReadyPromise = null;
-  let readyPromise = new Promise((resolve) => {
-    resolveReadyPromise = resolve;
-  });
+  const config = getConfig();
   let sittingTime = 0;
 
   const manager = new DeskManager({
-    deskAddress: program.addr || process.env.IDASEN_ADDR,
-    deskPositionMax: program.positionMax || 58,
-    readyCallback: async (foundDesk) => {
-      resolveReadyPromise(foundDesk);
-    },
+    deskAddress: config.deskAddress,
+    deskPositionMax: config.deskPositionMax || 58,
+    verbose: true,
   });
 
   setInterval(() => {
-    readyPromise.then((desk) => {
+    manager.getDesk().then((desk) => {
       // someone did something
       const idleTime = getIdleTime();
-      if (idleTime < CHECK_INTERVAL && desk.position < STAND_THRESHOLD) {
+      if (idleTime < CHECK_INTERVAL && desk.position < config.standThreshold) {
         sittingTime += CHECK_INTERVAL;
-      } else if (desk.position >= STAND_THRESHOLD || idleTime >= BREAK_TIME) {
+      } else if (
+        desk.position >= config.standThreshold ||
+        idleTime >= config.sittingBreakTime
+      ) {
         sittingTime = 0;
       }
     });
@@ -194,20 +305,25 @@ async function runServer() {
 
   ensureServer(async (message) => {
     if (message.op === "moveTo") {
-      const desk = await readyPromise;
+      const desk = await manager.getDesk();
       await desk.moveTo(message.pos);
       return true;
     } else if (message.op === "wait") {
-      await readyPromise;
+      await manager.getDesk();
       return true;
     } else if (message.op === "getStatus") {
-      const desk = await readyPromise;
+      const desk = await Promise.race([manager.getDesk(), sleep(50)]);
+      if (!desk) {
+        return { ready: false };
+      }
       return {
+        ready: true,
         height: desk.position,
         pos: describePosition(desk),
         sittingTime,
       };
     } else {
+      log("unknown message, ignoring");
       return false;
     }
   }).then(() => {
@@ -216,20 +332,25 @@ async function runServer() {
 
   process.on("exit", () => {
     try {
-      fs.unlinkSync(PIDFILE);
+      fs.unlinkSync(config.pidFilePath);
     } catch (e) {
       // ignore
     }
     try {
-      fs.unlinkSync(SOCKET);
+      fs.unlinkSync(config.socketPath);
     } catch (e) {
       // ignore
     }
   });
 }
 
-if (process.env.IDASEN_START_SERVER === "1") {
-  runServer();
-} else {
-  runClient().then(() => process.exit(0));
+async function main() {
+  await loadConfig();
+  if (program.server || process.env.IDASEN_START_SERVER === "1") {
+    runServer();
+  } else {
+    runClient().then(() => process.exit(0));
+  }
 }
+
+main();

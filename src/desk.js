@@ -1,6 +1,8 @@
 const EventEmitter = require("events");
 const schedule = require("node-schedule");
 
+const { sleep } = require("./utils");
+
 class Desk extends EventEmitter {
   static services() {
     return {
@@ -36,10 +38,6 @@ class Desk extends EventEmitter {
     this.isConnected = false;
     this.peripheral.on("connect", () => {
       this.isConnected = true;
-    });
-    this.peripheral.on("disconnect", () => {
-      this.isConnected = false;
-      this.reconnect();
     });
 
     this.connect();
@@ -175,7 +173,7 @@ class Desk extends EventEmitter {
           lastCommand = +new Date();
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await sleep(100);
 
         await this.readPosition();
 
