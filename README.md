@@ -11,6 +11,9 @@ pressed.
 
 It stores its configuration in a file called `~/.idasen-control.json`.
 
+The connection with the table is established via bluetooth, so a bluetooth
+module on the connecting computer is required.
+
 ## Installation
 
 If you have [volta](https://volta.sh/) then you can install it like this:
