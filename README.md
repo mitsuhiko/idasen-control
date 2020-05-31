@@ -1,5 +1,7 @@
 # idasen-control
 
+[![npm version](https://img.shields.io/npm/v/idasen-control.svg)](https://www.npmjs.com/package/idasen-control)
+
 This utility lets one control an IKEA IDÅSEN desk via command line utility.  It
 spawns a small server to keep the connection to the desk alive on first use and
 reuses that later.  This could be improved but is good enough for my purposes.
