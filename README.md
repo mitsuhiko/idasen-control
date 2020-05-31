@@ -11,6 +11,20 @@ pressed.
 
 It stores its configuration in a file called `~/.idasen-control.json`.
 
+## Installation
+
+If you have [volta](https://volta.sh/) then you can install it like this:
+
+```
+volta install idasen-control
+```
+
+Otherwise you can use npm:
+
+```
+npm install -g idasen-control
+```
+
 ## Scanning
 
 To find desks available you need to bring the tool into scanning mode after
@@ -58,4 +72,4 @@ This is best used with shell aliases.
 
 It's based on Steven Roebert's desk-control MQTT script.
 
-MIT
+[MIT](./LICENSE)
