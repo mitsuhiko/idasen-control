@@ -5,7 +5,6 @@ const fs = require("fs");
 const net = require("net");
 const { program } = require("commander");
 const { promisify } = require("util");
-const { getIdleTime } = require("desktop-idle");
 const prettyMilliseconds = require("pretty-ms");
 
 const { DeskManager } = require("./desk-manager");
@@ -287,21 +286,6 @@ async function runServer() {
     deskPositionMax: config.deskPositionMax || 58,
     verbose: true,
   });
-
-  setInterval(() => {
-    manager.getDesk().then((desk) => {
-      // someone did something
-      const idleTime = getIdleTime();
-      if (idleTime < CHECK_INTERVAL && desk.position < config.standThreshold) {
-        sittingTime += CHECK_INTERVAL;
-      } else if (
-        desk.position >= config.standThreshold ||
-        idleTime >= config.sittingBreakTime
-      ) {
-        sittingTime = 0;
-      }
-    });
-  }, CHECK_INTERVAL * 1000);
 
   ensureServer(async (message) => {
     if (message.op === "moveTo") {
