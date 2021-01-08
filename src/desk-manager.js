@@ -10,6 +10,7 @@ class DeskManager extends EventEmitter {
     super();
     this.config = config;
     this.started = false;
+    this.connecting = false;
     this.desk = null;
     this._createReadyPromise();
   }
@@ -105,6 +106,7 @@ class DeskManager extends EventEmitter {
 
     this.emit("discover", peripheral);
 
+    await this.ensureAddressKnown(peripheral);
     if (peripheral.address === this.config.deskAddress) {
       this.log("Found configured desk", peripheral.address);
       this.desk = new Desk(peripheral, this.config.deskPositionMax);
@@ -124,6 +126,29 @@ class DeskManager extends EventEmitter {
       this.didUpdateDevice();
     } else {
       this.log("Discovered a desk at", peripheral.address);
+    }
+  }
+
+  /**
+   * On MacOS, the peripheral address is unknown until it is being connected to.
+   * By connecting to it once, we work around this issue.
+   *
+   * @see https://github.com/mitsuhiko/idasen-control/issues/3
+   * @see https://github.com/abandonware/noble#event-peripheral-discovered
+   * @return void
+   */
+  async ensureAddressKnown(peripheral) {
+    if (this.connecting) {
+      return
+    }
+
+    if (peripheral.address === '' && peripheral.addressType === 'unknown') {
+      this.connecting = true;
+
+      await peripheral.connectAsync();
+      await peripheral.disconnectAsync();
+
+      this.connecting = false;
     }
   }
 
