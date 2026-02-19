@@ -1,78 +1,79 @@
-# idasen-control
+# desk
 
-[![npm version](https://img.shields.io/npm/v/idasen-control.svg)](https://www.npmjs.com/package/idasen-control)
+Minimal IKEA IDÅSEN control tool written in Rust using [`btleplug`](https://crates.io/crates/btleplug).
 
-This utility lets one control an IKEA IDÅSEN desk via command line utility.  It
-spawns a small server to keep the connection to the desk alive on first use and
-reuses that later.  This could be improved but is good enough for my purposes.
+## Features
 
-This lets you move to your preferred heights without having to keep the button
-pressed.
+- Scan for nearby desks
+- Connect once and store the selected desk in `~/.idasen.json`
+- Move desk up/down
+- Move desk to an explicit height
+- Read current desk height
+- Auto-managed background daemon for faster repeated commands
 
-It stores its configuration in a file called `~/.idasen-control.json`.
+## Requirements
 
-The connection with the table is established via bluetooth, so a bluetooth
-module on the connecting computer is required.
+- Rust toolchain (stable)
+- Bluetooth LE support on your system
 
-## Installation
+## Build
 
-If you have [volta](https://volta.sh/) then you can install it like this:
-
-```
-volta install idasen-control
-```
-
-Otherwise you can use npm:
-
-```
-npm install -g idasen-control
+```bash
+cargo build --release
 ```
 
-## Scanning
+Binary:
 
-To find desks available you need to bring the tool into scanning mode after
-setting your desk to pairing mode (keep bluetooth button pressed).  It will
-do an initial scan for 10 seconds and wait for 2 more seconds after each
-discovered device.
-
-```
-idasen-control --scan
+```bash
+./target/release/desk
 ```
 
-## Connecting
+## Usage
 
-After you know the address of the desk to connect to it:
-
-```
-idasen-control --connect-to ADDRESS
-```
-
-This will store the address in the config file.
-
-## Check Desk Status
-
-To check the status of the desk run:
-
-```
-idasen-control --status
+```bash
+desk list
+desk connect [IDENTIFIER]
+desk up
+desk down
+desk move-to <HEIGHT>
+desk status
 ```
 
-## Move Desk
+You can also run without installing:
 
-To move the desk to a position run this command:
-
-```
-idasen-control --move-to POSITION
+```bash
+cargo run -- <COMMAND>
 ```
 
-For instance `10` is a typical sitting position, `50` is a typical standing
-position.  If you want to block the shell until the desk is in its final
-position pass `--wait`.
+Examples:
 
-This is best used with shell aliases.
+```bash
+cargo run -- list
+cargo run -- connect
+cargo run -- connect "cc70b52f-b68e-356b-45f0-a401bed542ce"
+cargo run -- status
+cargo run -- move-to 45
+```
 
-## License
+## Configuration
 
-It's based on Steven Roebert's desk-control MQTT script.
+Configuration is stored in:
 
-[MIT](./LICENSE)
+```text
+~/.idasen.json
+```
+
+Default bounds:
+
+- `position_min`: `0.0`
+- `position_max`: `58.0`
+
+`up`, `down`, `move-to`, and `status` use a background daemon that starts on demand and exits after 30 minutes of inactivity.
+
+## Troubleshooting
+
+For debugging connection or timeout issues:
+
+```bash
+./target/release/desk --verbose --timeout 6 --connect-timeout 6 connect <IDENTIFIER>
+```

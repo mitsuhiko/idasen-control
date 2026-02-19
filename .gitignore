@@ -1,6 +1,2 @@
-/dist
-/logs
-/npm-debug.log
-/node_modules
+target/
 .DS_Store
-data/
